@@ -1,0 +1,153 @@
+///$tab Main
+SET ThousandSep=',';
+SET DecimalSep='.';
+SET MoneyThousandSep=',';
+SET MoneyDecimalSep='.';
+SET MoneyFormat='$ ###0.00;-$ ###0.00';
+SET TimeFormat='h:mm:ss TT';
+SET DateFormat='M/D/YYYY';
+SET TimestampFormat='M/D/YYYY h:mm:ss[.fff] TT';
+SET FirstWeekDay=6;
+SET BrokenWeeks=1;
+SET ReferenceDay=0;
+SET FirstMonthOfYear=1;
+SET CollationLocale='en-US';
+SET CreateSearchIndexOnReload=1;
+SET MonthNames='Jan;Feb;Mar;Apr;May;Jun;Jul;Aug;Sep;Oct;Nov;Dec';
+SET LongMonthNames='January;February;March;April;May;June;July;August;September;October;November;December';
+SET DayNames='Mon;Tue;Wed;Thu;Fri;Sat;Sun';
+SET LongDayNames='Monday;Tuesday;Wednesday;Thursday;Friday;Saturday;Sunday';
+SET NumericalAbbreviation='3:k;6:M;9:G;12:T;15:P;18:E;21:Z;24:Y;-3:m;-6:μ;-9:n;-12:p;-15:f;-18:a;-21:z;-24:y';
+
+///$tab Auto-generated section
+Set dataManagerTables = '','root','Global','Countries';
+//This block renames script tables from non generated section which conflict with the names of managed tables
+
+For each name in $(dataManagerTables) 
+    Let index = 0;
+    Let currentName = name; 
+    Let tableNumber = TableNumber(name); 
+    Let matches = 0; 
+    Do while not IsNull(tableNumber) or (index > 0 and matches > 0)
+        index = index + 1; 
+        currentName = name & '-' & index; 
+        tableNumber = TableNumber(currentName) 
+        matches = Match('$(currentName)', $(dataManagerTables));
+    Loop 
+    If index > 0 then 
+            Rename Table '$(name)' to '$(currentName)'; 
+    EndIf; 
+Next; 
+Set dataManagerTables = ;
+
+
+Unqualify *;
+
+__countryGeoBase:
+LOAD
+	ISO3Code AS [__ISO3Code],
+	ISO2Code AS [__ISO2Code],
+	Polygon AS [__Polygon]
+FROM [lib://DataFiles/countryGeo.qvd]
+(qvd);
+
+__countryCodeIsoTwo2Polygon:
+MAPPING LOAD
+	__ISO2Code,
+	__Polygon
+RESIDENT __countryGeoBase;
+
+LIB CONNECT TO [REST_httpsapi.covid19api.comsummary];
+
+[root]:
+LOAD
+	[Date] AS [Date_u0],
+	[__KEY_root] AS [-_FK_Global-__FK_Countries-__KEY_root];
+SQL SELECT 
+	"Date",
+	"__KEY_root"
+FROM JSON (wrap on) "root" PK "__KEY_root" QDL;
+
+[Global]:
+LOAD
+	[NewConfirmed] AS [Global.NewConfirmed],
+	[TotalConfirmed] AS [Global.TotalConfirmed],
+	[NewDeaths] AS [Global.NewDeaths],
+	[TotalDeaths] AS [Global.TotalDeaths],
+	[NewRecovered] AS [Global.NewRecovered],
+	[TotalRecovered] AS [Global.TotalRecovered],
+	[__FK_Global] AS [-_FK_Global-__FK_Countries-__KEY_root];
+SQL SELECT 
+	(SELECT 
+		"NewConfirmed",
+		"TotalConfirmed",
+		"NewDeaths",
+		"TotalDeaths",
+		"NewRecovered",
+		"TotalRecovered",
+		"__FK_Global"
+	FROM "Global" FK "__FK_Global")
+FROM JSON (wrap on) "root" PK "__KEY_root" QDL;
+
+[Countries]:
+LOAD
+	[Country],
+	[CountryCode],
+	[Slug],
+	[NewConfirmed] AS [Countries.NewConfirmed],
+	[TotalConfirmed] AS [Countries.TotalConfirmed],
+	[NewDeaths] AS [Countries.NewDeaths],
+	[TotalDeaths] AS [Countries.TotalDeaths],
+	[NewRecovered] AS [Countries.NewRecovered],
+	[TotalRecovered] AS [Countries.TotalRecovered],
+	[Date],
+	[__FK_Countries] AS [-_FK_Global-__FK_Countries-__KEY_root],
+	APPLYMAP( '__countryCodeIsoTwo2Polygon', UPPER([CountryCode]), '-') AS [Countries.CountryCode_GeoInfo];
+SQL SELECT 
+	(SELECT 
+		"Country",
+		"CountryCode",
+		"Slug",
+		"NewConfirmed",
+		"TotalConfirmed",
+		"NewDeaths",
+		"TotalDeaths",
+		"NewRecovered",
+		"TotalRecovered",
+		"Date",
+		"__FK_Countries"
+	FROM "Countries" FK "__FK_Countries")
+FROM JSON (wrap on) "root" PK "__KEY_root" QDL;
+
+
+
+TAG FIELD [CountryCode] WITH '$geoname', '$relates_Countries.CountryCode_GeoInfo';
+TAG FIELD [Countries.CountryCode_GeoInfo] WITH '$geopolygon', '$hidden', '$relates_CountryCode';
+
+DROP TABLES __countryGeoBase;
+[autoCalendar]: 
+  DECLARE FIELD DEFINITION Tagged ('$date')
+FIELDS
+  Dual(Year($1), YearStart($1)) AS [Year] Tagged ('$axis', '$year'),
+  Dual('Q'&Num(Ceil(Num(Month($1))/3)),Num(Ceil(NUM(Month($1))/3),00)) AS [Quarter] Tagged ('$quarter', '$cyclic'),
+  Dual(Year($1)&'-Q'&Num(Ceil(Num(Month($1))/3)),QuarterStart($1)) AS [YearQuarter] Tagged ('$yearquarter', '$qualified'),
+  Dual('Q'&Num(Ceil(Num(Month($1))/3)),QuarterStart($1)) AS [_YearQuarter] Tagged ('$yearquarter', '$hidden', '$simplified'),
+  Month($1) AS [Month] Tagged ('$month', '$cyclic'),
+  Dual(Year($1)&'-'&Month($1), monthstart($1)) AS [YearMonth] Tagged ('$axis', '$yearmonth', '$qualified'),
+  Dual(Month($1), monthstart($1)) AS [_YearMonth] Tagged ('$axis', '$yearmonth', '$simplified', '$hidden'),
+  Dual('W'&Num(Week($1),00), Num(Week($1),00)) AS [Week] Tagged ('$weeknumber', '$cyclic'),
+  Date(Floor($1)) AS [Date] Tagged ('$axis', '$date', '$qualified'),
+  Date(Floor($1), 'D') AS [_Date] Tagged ('$axis', '$date', '$hidden', '$simplified'),
+  If (DayNumberOfYear($1) <= DayNumberOfYear(Today()), 1, 0) AS [InYTD] ,
+  Year(Today())-Year($1) AS [YearsAgo] ,
+  If (DayNumberOfQuarter($1) <= DayNumberOfQuarter(Today()),1,0) AS [InQTD] ,
+  4*Year(Today())+Ceil(Month(Today())/3)-4*Year($1)-Ceil(Month($1)/3) AS [QuartersAgo] ,
+  Ceil(Month(Today())/3)-Ceil(Month($1)/3) AS [QuarterRelNo] ,
+  If(Day($1)<=Day(Today()),1,0) AS [InMTD] ,
+  12*Year(Today())+Month(Today())-12*Year($1)-Month($1) AS [MonthsAgo] ,
+  Month(Today())-Month($1) AS [MonthRelNo] ,
+  If(WeekDay($1)<=WeekDay(Today()),1,0) AS [InWTD] ,
+  (WeekStart(Today())-WeekStart($1))/7 AS [WeeksAgo] ,
+  Week(Today())-Week($1) AS [WeekRelNo] ;
+
+DERIVE FIELDS FROM FIELDS [Date_u0], [Date] USING [autoCalendar] ;
